@@ -8,3 +8,7 @@ Midterm (R) - This is a project that was done for my R Programming statistics co
 Final Project (R) - This was the final project for my R Programming statistics coruse where we were to create a program that would automatically select the best model from a combination of variables. We then performed other analyses in the program.
 
 Simplex Algorithms (R) - This was a voluntary project that I undertook for my Operations Research class. The code takes in a specific type of matrix and has the ability to use several different algorithms to optimize the appropriation of resources.
+
+Data Cleaning (SAS) - Cleaning data exercise prior to using for statistical analysis
+
+FactorAnalysis, logisticRegression, merging (SAS) - Some templates that I saved from a project. Protected information has been removed from this file, so it is only for display.
