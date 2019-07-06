@@ -1,0 +1,373 @@
+---
+title: "418 Midterm: Analyzing the Global Terrorism Database"
+author: "Alex Kloska"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries and options used through the project.
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(lubridate)
+options(digits=10, scipen=999)
+```
+
+Reading in the datasets.
+```{r, message=FALSE}
+library(readr)
+GTD <- read_csv("GTD.csv")
+countycity <- read_csv("county_city.csv")
+population <- read_csv("population.csv")
+poverty <- read_csv("poverty.csv")
+```
+
+# Part 1: Assembly and Cleaning
+
+Before merging the datasets all into one that will be analyzed, I first needed to find what keys to merge the datasets on. I determined that the keys were going to be city and state. Complications arose because all of the datasets have their data stored in different formats. I decided it was best to convert all state abbreviations to the full state names and remove any duplicated cities within each county and state and then proceed with merging. There were also some issues with specific names such as New York versus New York City and District of Columbia which I fixed explicitly. The final dataset still has little bit of missing data simply because that information was not in the other datasets.
+
+```{r}
+# Changing column names for merging purposes
+colnames(GTD)[4] = "state"
+colnames(poverty)[1] = "state"
+colnames(population)[2] ="stateID"
+colnames(population)[6] ="state"
+colnames(poverty)[2] = "county"
+colnames(population)[5] = "city"
+
+# Cleaning county names 
+poverty$county <- str_remove_all(poverty$county," County| Borough| Census Area")
+
+# Removing the additional "town" and "city" from the ends of all the names
+population$city <- str_remove_all(population$city, " town| city| Town| village| Village| \\(pt.\\)")
+
+# Removing duplicate cities in counties
+countycity <- countycity[!duplicated(countycity[c("city","county","state")]),]
+
+# Removing duplicates in poverty
+poverty <- poverty[!duplicated(poverty[c("state","county")]),]
+
+# Removing duplicates in population
+population <- population[!duplicated(population[c("city","state")]),]
+
+# Renaming New York City to New York so it can be merged into GTD
+GTD$city <- str_replace_all(GTD$city, "New York City", "New York")
+
+# Joining countycity to poverty on county and state
+left_join(poverty,countycity, by=c("county","state")) %>%
+  filter(city %in% GTD$city) -> df
+
+# Manually fixing complications with Washington DC
+df$city[df$state=="DC"] <- "Washington"
+
+# Removing latitude and longitude, unnecessary for this data frame
+df <- select(df,-c("latitude","longitude"))
+
+# Combining data from all cities within same county 
+# since these appeared to have been broken down into districts.
+df %>% group_by(state,city) %>%
+  select_if(is.numeric) %>%
+  summarise_all(funs(sum)) -> df
+
+# Recoding state abbreviates
+df$state <- state.name[match(df$state,state.abb)]
+
+# Fixing District of Columbia being labeled as missing
+df$state[is.na(df$state)] <- "District of Columbia"
+
+# Merging into final data frame
+left_join(GTD,df, by=c("state","city")) -> df
+
+# Removing unused variables from population
+population <- select(population, -c("SUMLEV","stateID","COUNTY","PLACE"))
+
+# Left joining population onto df
+left_join(df,population, by=c("state","city")) -> df
+```
+
+### Creating a date from the iyear, imonth, and iday variables.
+Here I am creating a date variable from the information given. I combined the year, month, and day into a string and then converted the string in a date.
+
+```{r}
+# Creating date as string format
+df$date <- paste0(df$iyear,"-",df$imonth,"-",df$iday)
+
+# Converting date to date format
+df$date <- ymd(df$date)
+
+# Dropping the old variables
+df %>% select(-c("iyear","imonth","iday")) -> df
+```
+
+## Recoding the Data
+Now that the data is all merged into the data frame that I wanted to be working with, I recoded the data according to the Global Terrorism Data codebook. This was done for readability rather than functionality.
+
+```{r}
+# nperps = -99 is coding for unknown
+df$nperps <- ifelse(df$nperps == -99, "Unknown", df$nperps)
+df$nperpcap <- ifelse(df$nperpcap == -99, "Unknown", df$nperpcap)
+
+# Recoding vicinity, doubtterr, multiple, success, suicide, individual, and claimed. 0=No and 1=Yes
+df[,c("vicinity","doubtterr","multiple","success","suicide","individual","claimed")] <-
+  sapply(df[,c("vicinity","doubtterr","multiple","success","suicide","individual","claimed")], 
+         function(x) recode_factor(x,"0"="No","1"="Yes"))
+
+# Recoding property. 0=No, 1=Yes, -9=Unknown
+df$property <- recode_factor(df$property,
+                             "0"="No",
+                             "1"="Yes",
+                             "-9"="Unknown")
+```
+
+***
+
+## Looking for Problems in the Data
+I started checking for any abnormalities in the data by looking at frequency tables for several of the categorical variables. I didn't feel it was necessary to make any changes with this information.
+```{r}
+df %>% 
+  select(c("state","city","attacktype1_txt","targtype1_txt","gname")) %>% # Piping variables state, city, attacktype1_txt, targtype1_txt, and gname
+  sapply(function(x) return(table(x))) # creating frequency table for each variable
+```
+
+***
+
+Now taking a look at factors to ensure they were all recoded correctly.
+
+```{r}
+df %>% 
+  select(c("doubtterr","multiple","success","suicide","individual","claimed","property")) %>%
+  sapply(function(x) table(x))
+```
+
+Nothing major stood out when looking through the finalized dataset, so I moved into the analysis.
+
+***
+
+# Part 2: Analyzing the Data
+
+## 1. Mapping the Attacks
+Mapping the attacks across the country to visualize what is happening and where it is happening.
+
+```{r warning=FALSE, message=FALSE}
+df %>%
+    ggplot(aes(longitude, latitude)) +
+    borders("state") +
+    geom_point(aes(size=POPESTIMATE2015, color=attacktype1_txt)) +
+    ggtitle("Location of Attacks") +
+    labs(size="Population Estimate", color="Attack Type") +
+    coord_quickmap()
+```
+
+From this map, it appears that attacks such as armed assault and bombing tend to occur in higher populated areas while lower populated areas tend towards facility/infrastructure attacks.
+
+***
+
+```{r warning=FALSE, message=FALSE}
+df %>%
+    ggplot(aes(longitude, latitude)) +
+    borders("state") +
+    geom_point(aes(size=PCTPOVALL_2015, color=attacktype1_txt)) +
+    #scale_color_gradient(low="blue",high="red") +
+    ggtitle("Location of Attacks") +
+    labs(size="Percentage Poverty", color="Attack Type") +
+    coord_quickmap()
+```
+
+It is difficult to make any conclusions from this map.
+
+***
+
+```{r warning=FALSE, message=FALSE}
+df %>%
+    ggplot(aes(longitude, latitude)) +
+    borders("state") +
+    geom_point(aes(size=PCTPOV017_2015, color=attacktype1_txt)) +
+    #scale_color_gradient(low="blue",high="red") +
+    ggtitle("Location of Attacks") +
+    labs(size="Percentage of Minor Poverty", color="Attack Type") +
+    coord_quickmap()
+```
+
+***
+
+```{r warning=FALSE, message=FALSE}
+df %>%
+    ggplot(aes(longitude, latitude)) +
+    borders("state") +
+    geom_point(aes(size=MEDHHINC_2015, color=attacktype1_txt)) +
+    ggtitle("Location of Attacks") +
+    labs(size="Median Household Income", color="Attack Type") +
+    coord_quickmap()
+```
+
+Again, it is difficult to make any definitive conclusions from this map, but it appears that places with larger median household incomes have more armed assaults occuring.
+
+***
+
+## 2. Types of Incidents by Month (Individual and Claimed)
+I created a faceted grid of attacks by individuals and whether or not the attack was claimed by a group.
+```{r}
+# Recoding claimed for clarity in graph
+df$claimed <- sapply(df$claimed, function(x) recode_factor(x,"No"="Unclaimed","Yes"="Claimed"))
+
+# Recoding individual for clarity in graph
+df$individual <- sapply(df$individual, function(x) recode_factor(x,"No"="Affiliated","Yes"="Unaffiliated"))
+
+df %>%
+  ggplot(mapping=aes(x=month(date,label=TRUE))) +
+  geom_bar() +
+  ggtitle("Number of Attacks by Claimed by Individuals and Groups") +
+  xlab("Month") -> p1
+p1 + facet_grid(claimed~individual) # Creating faceted grid, claimed by individual
+```
+
+This chart has identified an interesting trend. It appears to be showing that attacks by people who are affiliated with a group tend to be unclaimed attacks while attacks by unaffiliated individuals seem more likely to be claimed. It is sensible to think that attacks by people who are affiliated with a group are more likely to be claimed by the group, but that does not appear to be the case.
+
+***
+
+## 3. Casualties by Population, Poverty, and Income
+Here I am looking for any relationships between the number of casualties and population, poverty, or income.
+
+```{r message=FALSE, warning=FALSE}
+# Adding casualty variable as number killed + number wounded
+df %>% mutate(casualties = nkill + nwound) -> df
+
+df %>% 
+  ggplot(mapping=aes(x=POPESTIMATE2016,y=casualties)) +
+  ggtitle("Number of Casualties by Population Size") +
+  xlab("Population Estimate") +
+  geom_jitter()
+```
+
+This chart tells us that attacks tend to occur mostly in cities with "smaller" populations (below 2 million) and that the number of casualties does not correlate with the size of the population.
+
+***
+
+```{r warning=FALSE}
+df %>% 
+  ggplot(mapping=aes(x=PCTPOVALL_2015,y=casualties)) +
+  ggtitle("Number of Casualties by Percentage of Poverty") +
+  xlab("Percentage of Poverty") +
+  geom_point()
+```
+
+This graph shows us that many of the attacks occur in places where below 20% of the population is in poverty and that there does not appear to be a correlation between casualties and poverty levels.
+
+***
+
+```{r warning=FALSE}
+df %>% 
+  ggplot(mapping=aes(x=PCTPOV017_2015,y=casualties)) +
+  ggtitle("Number of Casualties by Percentage of Minors in Poverty") +
+  xlab("Percentage of Minors in Poverty") +
+  geom_point()
+```
+
+
+```{r warning=FALSE}
+df %>% 
+  ggplot(mapping=aes(x=MEDHHINC_2015,y=casualties)) +
+  ggtitle("Number of Casualties by Median Household Income") +
+  xlab("Median Household Income") +
+  geom_point()
+```
+
+The only thing I can see here is that there are far more attacks in places where the median household income is around $50k. There does not appear to be any correlation between casualties and median household income.
+
+***
+
+## 4. Attack Types by Population, Poverty, and Income
+Taking a look into the relationships between attack types and population, poverty, and income. 
+```{r message=FALSE, warning=FALSE}
+# Identifying which variables should be collapsed (less than 3 occurances)
+as.tibble(table(df$attacktype1_txt)) 
+df$attacktype1_txt <- fct_collapse(df$attacktype1_txt,
+                    other=c("Assassination","Hijacking","Hostage Taking (Barricade Incident)")
+                    )
+
+df %>% 
+  ggplot(mapping=aes(x=POPESTIMATE2015, y=attacktype1_txt)) +
+  geom_point() + 
+  ggtitle("Attack Type by Population Estimate") +
+  ylab("Attack Type") +
+  xlab("Population Estimate")
+
+df %>% 
+  ggplot(mapping=aes(x=PCTPOVALL_2015, y=attacktype1_txt)) +
+  geom_point() +
+  ggtitle("Attack Type by Percentage of Poverty") +
+  ylab("Attack Type") +
+  xlab("Percentage of Poverty")
+
+df %>% 
+  ggplot(mapping=aes(x=PCTPOV017_2015, y=attacktype1_txt)) +
+  geom_point() + 
+  ggtitle("Attack Type by Percentage of Minor Poverty") +
+  ylab("Attack Type") +
+  xlab("Percentage of Minors in Poverty")
+
+df %>% 
+  ggplot(mapping=aes(x=MEDHHINC_2015, y=attacktype1_txt)) +
+  geom_point() + 
+  ggtitle("Attack Type by Median Household Income") +
+  ylab("Attack Type") +
+  xlab("Median Household Income")
+```
+
+I did not find anything from this data that implied any strong correlations between attack types and population, poverty, or median household income. The only thing that really stood out was that there were only four attacks in cities that had a population over 5 million.
+
+***
+
+## 5. Heat Maps for Attack Types by Property and Group Affiliation
+I decided that a heat map would be the best for visualizing the relationships between attack types, property, and group affiliation as they are all categorical. I grouped them together then counted the number of attacks in each group.
+
+```{r}
+df %>%
+  group_by(attacktype1_txt, property) %>% count(attacktype1_txt) %>% 
+  ggplot(mapping=aes(y=attacktype1_txt,x=property)) + 
+  geom_tile(aes(fill=n), color="white") +
+  geom_text(aes(label = n), color="white") +
+  ggtitle("Heatmap of Attack Types by Property Damage") +
+  labs(y="Attack Type",fill="Number of Attacks") +
+  scale_fill_gradient(low = "lightblue",high = "blue")
+```
+
+This heat map shows that a large portion of the attacks caused property damage and that the majority of these were classified under facility/infrastructure attacks. The conclusions to be made from this heat map are logical.
+
+***
+
+```{r}
+df %>%
+  group_by(attacktype1_txt, individual) %>% count(attacktype1_txt) %>%
+  ggplot(mapping=aes(y=attacktype1_txt,x=individual)) + 
+  geom_tile(aes(fill=n), color="white") +
+  geom_text(aes(label = n), color="white") +
+  ggtitle("Heatmap of Attack Types by Affiliation") +
+  labs(y="Attack Type",fill="Number of Attacks") +
+  scale_fill_gradient(low = "lightblue", high = "blue")
+```
+
+This heat map breaks down the type of attack based on whether the attack was done by a lone individual or a group. It shows that those affiliated with a group more frequently attacked facilities/infrastructure while unaffiliated individuals were more likely to perform armed assault. Bombings were split evenly between individuals and groups.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

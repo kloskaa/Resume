@@ -1,0 +1,739 @@
+---
+title: "Simplex Algorithms"
+author: "Alex Kloska"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(stargazer)
+library(kableExtra)
+library(hash)
+library(MASS)
+options(digits=10,scipen=999)
+```
+
+# Create Matrix Function
+```{r}
+createLP <- function(C,...,varnames=NULL,integers=NULL,basic=NULL){
+  x <- list(...)
+  M <- as.matrix(C)
+  for(i in 1:length(x)){
+    M <- cbind(M,x[[i]])
+  }
+  M <- t(M)
+  I <- diag(nrow=nrow(M),ncol=nrow(M))
+  I <- apply(I,2,lag)
+  I[1,] <- 0
+  I <- I[,-ncol(I)]
+  RHS <- as.matrix(M[,ncol(M)])
+  M <- M[,-ncol(M)]
+  M <- cbind(M,I,RHS)
+  M[1,] <- -1*M[1,] # making objective row negative
+  tab <- cbind(c(1,rep(0,nrow(M)-1)), M)
+  tab -> M
+  if(is.null(varnames)){
+    varnames <- c('z',paste0("x",1:(ncol(M)-length(x)-2)),paste0("s",1:(length(x))),'RHS')
+  }
+  if(is.null(integers)){
+    integers <- rep(F,ncol(M))
+  }
+  variables <- list(varnames = varnames,
+                    integers = integers,
+                    basic = basic)
+  M <- unname(M)
+  lp <- list(matrix = M, variables = variables, identity = I, objVar = (length(C)-1))
+  return(lp)
+}
+```
+
+# Creating Dual
+```{r}
+dualLP <- function(A){
+  c <- A[,ncol(A)]
+}
+```
+
+# Primal Simplex using Blands Anti-Cycling Algorithm for Strictly Linear Programs
+```{r, warning=FALSE, message=FALSE}
+simplex <- function(A){
+  library(kableExtra)
+  # setting column and row names to numeric values
+  colnames(A) = c(1:ncol(A))
+  rownames(A) = c(1:nrow(A))
+  count <- 0
+  repeat{
+    count <- count + 1
+    # Locating column of first negative coefficient in objective function
+    for(i in 1:ncol(A)){
+      x <- A[2:nrow(A),i]
+      if(A[1,i] < 0 & any(x > 0)){ # checking obj coefficient is negative and at least 1 row below it is positive
+        which(colnames(A)==i) -> c
+        break
+      }
+    }
+    # Dividing entering variable by RHS and selecting row with lowest value
+    rvec <- c(NA) # NA so objective function is ignored
+    for(i in 2:nrow(A)){
+      if(A[i,c] > 0){
+        rvec <- append(rvec,(1/((A[i,c] / A[i,ncol(A)])))) # add row to row vector
+      } else if(A[i,c] <= 0){
+        rvec <- append(rvec,NA) # non-negativity constraint
+      }
+    }
+    if(isTRUE(all.equal(rvec,NA))){ # Entering variable but no leaving variable
+      count = 'Unbounded. Ignore Solution'
+      break
+    }
+    which.min(rvec) -> r # select minimum of row vector
+    A[r,c] -> pivot # pivot point at r,c
+    A[r,] <- (1/pivot)*A[r,] # reduce pivot row
+    # row operations to pivot at [r,c]
+    for(i in 1:nrow(A)){
+      if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+        next
+      }
+      A[i,] <- A[i,] - A[i,c]*A[r,]
+    }
+    # breaks if all coefficients in objective row are 0 or positive
+    if(all(A[1,]>=0)){
+      break
+    }
+    if(count==100){ #
+      count <- 'Too Many'
+      break
+    }
+  }
+  return(A)
+}
+```
+
+# Primal Simplex Algorithm
+```{r message=FALSE, warning=FALSE}
+# Step 1: Select a viable entering variable (column)
+# Step 2: Select a viable leaving variable (row)
+# Step 3: Pivot at [row, column]
+# Step 4: Determine if optimal. Return to step 1 if not optimal.
+
+simplex_primal <- function(lp) {
+  if(typeof(lp)=="list"){
+    A <- lp[[1]]
+    if(!is.null(lp[[2]][1])){
+      varnames <- lp$variables$varnames
+    } else {
+      varnames<-c("z",paste0("x",1:(ncol(A)-2)),"RHS")
+    }
+  } else {
+    A <- lp
+    varnames <- c('z',paste0("x",1:(ncol(A)-2)),'RHS')
+    objVar=1
+  }
+  if(any(A[2:nrow(A),ncol(A)]<0)){
+    stop("Not Initial Basic Primal Feasible. Negative in RHS.")
+  }
+  if(all(A[1,]>=0)){
+    stop("No negative coefficients in cost function.")
+  }
+  # setting column and row names to numeric values
+  colnames(A) = c(1:ncol(A))
+  rownames(A) = c(1:nrow(A))
+  count <- 0
+  repeat{
+    count <- count + 1
+    # Step 1 -------------------------------------------------------
+    # Locating column of first negative coefficient in objective function
+    for(i in 1:ncol(A)){
+      x <- A[2:nrow(A),i]
+      if(A[1,i] < 0 & any(x > 0)){ # checking obj coefficient is negative and at least 1 row below it is positive
+        which(colnames(A)==i) -> c
+        break
+      }
+    }
+    # Step 2 -------------------------------------------------------
+    # Dividing entering variable by RHS and selecting row with lowest value
+    rvec <- c(NA) # NA so objective function is ignored
+    for(i in 2:nrow(A)){
+      if(A[i,c] > 0){
+        rvec <- append(rvec,(1/((A[i,c] / A[i,ncol(A)])))) # add row to row vector
+      } else if(A[i,c] <= 0){
+        rvec <- append(rvec,NA) # non-negativity constraint
+      }
+    }
+    if(isTRUE(all.equal(rvec,NA))){ # Entering variable but no leaving variable
+      break
+    }
+    which.min(rvec) -> r # select minimum of row vector
+    # Step 3 -------------------------------------------------------
+    print(paste0("Pivot at ",r,",",c))
+    A[r,] <- A[r,]/A[r,c] # reduce pivot row
+    # row operations to pivot at [r,c]
+    for(i in 1:nrow(A)){
+      if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+        next
+      }
+      A[i,] <- A[i,] - A[i,c]*A[r,]
+    }
+    # Step 4 -------------------------------------------------------
+    # breaks if all coefficients in objective row are 0 or positive
+    x <- A[1,]
+    if(all(A[1,]>=0)){
+      break
+    }
+    if(count==50){ #
+      stop("Too Many Iterations")
+    }
+  }
+  return(A)
+}
+```
+
+# Kable Implementation
+```{r}
+kableOut <- function(A){
+  decisionVars <- varnames[1:objVar]
+  values <- c()
+  for(i in 2:(objVar+1)){
+    if(sum(A[,i])==1){
+      which(colnames(A)==i) -> c
+      for(i in 1:nrow(A)){
+        if(A[i,c] == 1){
+          values <- append(values,A[i,ncol(A)]) 
+        } 
+      }
+    } else {
+      values <- append(values,0)
+    }
+  }
+  options(digits=4)
+  solution <- data.frame(decisionVars,values)
+  # Putting solutions into a string for output display
+  solutionOutput <- paste0('Solution:\n')
+  for(i in 1:nrow(solution)){
+    solutionOutput <- paste0(solutionOutput,solution[i,1],'=',solution[i,2],'\n')
+  }
+  colnames(A) = varnames
+  A %>%
+    kable() %>%
+    kable_styling(bootstrap_options = c('striped','condensed'), full_width = F, position = 'left') %>%
+    footnote(general = paste0('Number of Iterations to Reach Optimum: ',count,'\n',solutionOutput))  -> kabOut
+  return(kabOut)
+}
+```
+
+# Dual Simplex Algorithm
+```{r}
+# Step 1: Select a viable leaving variable (row)
+# Step 2: Select a viable entering variable (column)
+# Step 3: Pivot at [row, column]
+# Step 4: Determine if optimal. Return to step 1 if not optimal.
+
+simplex_dual <- function(lp){  
+  if(typeof(lp)=="list"){
+    A <- lp[[1]]
+    varnames <- lp$variables$varnames
+    identity <- lp[[3]]
+  } else {
+    A <- lp
+  }
+  if(!any(A[,ncol(A)]<0)){
+    stop("Not Initial Basic Dual Feasible. No negatives in RHS.")
+  }
+  if(all(A[1,]<0)){
+    stop("No positive coefficients in cost function.")
+  } 
+  # setting column and row names to numeric values
+  colnames(A) = c(1:ncol(A))
+  rownames(A) = c(1:nrow(A))
+  count <- 0
+  repeat{
+    count <- count + 1
+    # Step 1 -------------------------------------------------------
+    # Choosing leaving variable
+    for(i in 2:nrow(A)){
+      x <- A[i,ncol(A)]
+      if(A[i,ncol(A)] < 0 & any(x < 0)){
+        which(rownames(A)==i) -> r
+        break
+      } 
+    }
+    # Step 2 -------------------------------------------------------
+    # Dividing entering variable by RHS and selecting row with lowest value
+    
+    ##### Change to choose first viable column
+    cvec <- c() # NA so objective function is ignored
+    for(i in 1:(ncol(A)-1)){
+      if(A[r,i] < 0){
+        cvec <- append(cvec,(A[1,i]/A[r,i])) # add row to row vector
+      } else if(A[r,i] >= 0){
+        cvec <- append(cvec,NA) # negativity constraint
+      }
+    }
+    if(isTRUE(all.equal(cvec,NA))){ # No leaving variable
+      break
+    }
+    which.max(cvec) -> c # select column closest to zero
+    # Step 3 -------------------------------------------------------
+    print(paste0("Pivot at ",r,",",c))
+    A[r,] <- A[r,]/A[r,c] # reduce pivot row
+    # row operations to pivot at [r,c]
+    for(i in 1:nrow(A)){
+      if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+        next
+      }
+      A[i,] <- A[i,] - A[i,c]*A[r,]
+    }
+    # Step 4 -------------------------------------------------------
+    # breaks if all coefficients in objective row are 0 or negative
+    if(all(A[2:nrow(A),ncol(A)]>=0)){
+      break
+    }
+    if(count==50){ #
+      stop("Too Many Iterations")
+    }
+  }
+  return(A)
+}
+```
+
+# Sensitivity Analysis
+```{r}
+# For when the RHS changes
+# x is the variable being changed
+sensRHS <- function(M, x, delta){
+  d <- delta*M[,x] # total change
+  M[,ncol(M)] <- M[,ncol(M)] + t(d) # adding to RHS
+  M <- cbind(M,d)
+  return(M)
+}  
+
+# For when the objective function values change
+sensCost <- function(M, x, delta){
+  r <- match(1,t(M[,x])) # Selecting pivot row
+  c <- match(x,colnames(M)) # Selecting pivot column
+  M[1,x] <- M[1,x] + delta
+  M[r,c] -> pivot # pivot point at r,c
+  M[r,] <- (1/pivot)*M[r,] # reduce pivot row
+  # row operations to pivot at [r,c]
+  for(i in 1:nrow(M)){
+    if(rownames(M)[i]==rownames(M)[r]){ # skip pivot row
+      next
+    }
+    M[i,] <- M[i,] - M[i,c]*M[r,]
+  }
+  return(M)
+}
+```
+
+# Pivot
+```{r,warning=FALSE,message=FALSE}
+pivot <- function(A,r,c){
+  if(A[r,c]==0){
+    stop("Cannot Pivot on 0")
+  }
+  varnames <- dimnames(A)[[2]]
+  colnames(A) = c(1:ncol(A))
+  rownames(A) = c(1:nrow(A))
+  A[r,] <- A[r,]/A[r,c] # reduce pivot row
+  # row operations to pivot at [r,c]
+  for(i in 1:nrow(A)){
+    if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+      next
+    }
+    A[i,] <- A[i,] - A[i,c]*A[r,]
+  }
+  if(!is.null(varnames)){
+    colnames(A)<-varnames
+  }
+  return(A)
+}
+```
+
+# Latex Output
+```{r}
+library(xtable)
+latex <- function(A,lengthvec=2){
+  print(xtable(A, type = "latex", digits = lengthvec), file = "LatexOutput.tex")
+}
+```
+
+# Mixed Integer Linear Programming Using Two Phase Simplex
+```{r}
+# Step 1: Select a viable entering variable (column)
+# Step 2: Select a viable leaving variable (row)
+# Step 3: Pivot at [row, column]
+# Step 4: Check integer. Apply restriction
+# Step 5: Determine if optimal. Return to step 1 if not optimal.
+
+simplex_mixedInt <- function(lp) {
+  if(typeof(lp)=="list"){
+    A <- lp[[1]]
+    varnames <- lp[[2]][[1]]
+    isInteger <- lp[[2]][[2]]
+    basic <- lp[[2]][[3]]
+    identity <- lp[[3]]
+  } else {
+    return(print("Invalid Input"))
+  }
+  sPrimal <- function(lp) {
+    if(typeof(lp)=="list"){
+      A <- lp[[1]]
+      varnames <- lp[[2]][[1]]
+      identity <- lp[[3]]
+    } else { 
+      A <- lp
+      varnames <- c('z',paste0("x",1:(ncol(A)-2)),'RHS')
+    }
+    library(kableExtra)
+    # setting column and row names to numeric values
+    colnames(A) = c(1:ncol(A))
+    rownames(A) = c(1:nrow(A))
+    count <- 0
+    repeat{
+      count <- count + 1
+      # Locating column of first negative coefficient in objective function
+      for(i in 1:ncol(A)){
+        x <- A[2:nrow(A),i]
+        if(A[1,i] < 0 & any(x > 0)){
+          which(colnames(A)==i) -> c
+          break
+        } 
+      }
+      rvec <- c(NA) # NA so objective function is ignored
+      for(i in 2:nrow(A)){
+        if(A[i,c] > 0){
+          rvec <- append(rvec,(1/((A[i,c] / A[i,ncol(A)])))) # add row to row vector
+        } else if(A[i,c] <= 0){ 
+          rvec <- append(rvec,NA) # non-negativity constraint
+        }
+      } 
+      if(isTRUE(all.equal(rvec,NA))){ # Entering variable but no leaving variable
+        count = 'Unbounded. Ignore Solution'
+        break
+      }
+      which.min(rvec) -> r # select minimum of row vector
+      A[r,] <- A[r,]/A[r,c] # reduce pivot row
+      # row operations to pivot at [r,c]
+      for(i in 1:nrow(A)){
+        if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+          next 
+        }
+        A[i,] <- A[i,] - A[i,c]*A[r,]
+      }
+      if(all(t(A[1,]) >= 0)){
+        break
+      }
+      if(count==100){ #
+        count <- 'Too Many'
+        break
+      }
+    }
+    return(A)
+  }
+  pivot <- function(A,r,c){
+    colnames(A) = c(1:ncol(A))
+    rownames(A) = c(1:nrow(A))
+    A[r,] <- A[r,]/A[r,c] # reduce pivot row
+    # row operations to pivot at [r,c]
+    for(i in 1:nrow(A)){
+      if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+        next
+      }
+      A[i,] <- A[i,] - A[i,c]*A[r,]
+    } 
+    return(A)
+  }
+  checkIBFS <- function(A){
+    RHS <- A[2:nrow(A),ncol(A)]
+    basic <- rep(FALSE,ncol(A))
+    for(i in 1:ncol(A)){
+      if(identical(unique(A[,i]),c(0,1)) | identical(unique(A[,i]),c(1,0))){
+        basic[i] = TRUE
+      }
+    }
+    if(ncol((A[,which(basic==TRUE)])==ncol(diag(nrow(A)))) & all(RHS >= 0)){
+      return(TRUE)
+    } else {
+      return(FALSE)
+    }
+  }
+  library(kableExtra)
+  # setting column and row names to numeric values
+  colnames(A) = c(1:ncol(A))
+  rownames(A) = c(1:nrow(A))
+  count <- 0
+  # LINEAR PROGRAMMING
+  repeat{
+    count <- count + 1
+    # Step 1 -------------------------------------------------------
+    # Locating column of first negative coefficient in objective function
+    for(i in 1:ncol(A)){
+      x <- A[2:nrow(A),i]
+      if(A[1,i] < 0 & any(x > 0)){ # checking obj coefficient is negative and at least 1 row below it is positive
+        which(colnames(A)==i) -> c
+        break
+      }
+    }
+    # Step 2 -------------------------------------------------------
+    # Dividing entering variable by RHS and selecting row with lowest value
+    rvec <- c(NA) # NA so objective function is ignored
+    for(i in 2:nrow(A)){
+      if(A[i,c] > 0){
+        rvec <- append(rvec,(1/((A[i,c] / A[i,ncol(A)])))) # add row to row vector
+      } else if(A[i,c] <= 0){
+        rvec <- append(rvec,NA) # non-negativity constraint
+      } 
+    } 
+    if(isTRUE(all.equal(rvec,NA))){ # Entering variable but no leaving variable
+      count = 'Unbounded. Ignore Solution'
+      break
+    }
+    which.min(rvec) -> r # select minimum of row vector
+    # Step 3 -------------------------------------------------------
+    A[r,] <- A[r,]/A[r,c] # reduce pivot row
+    # row operations to pivot at [r,c]
+    for(i in 1:nrow(A)){
+      if(rownames(A)[i]==rownames(A)[r]){ # skip pivot row
+        next
+      }
+      A[i,] <- A[i,] - A[i,c]*A[r,]
+    }
+    # Step 4 -------------------------------------------------------
+    # Check basis
+    for(i in 1:ncol(A)){
+      if(identical(unique(A[,i]),c(0,1))){
+        basic[i] <- TRUE
+      } else {
+        basic[i] <- FALSE
+      }
+    }
+    # Step 5 -------------------------------------------------------
+    # breaks if all coefficients in objective row are 0 or positive
+    if(all(t(A[1,]) >= 0)){
+      break
+    }
+    if(count==100){ #
+      count <- 'Too Many'
+      break
+    }
+  }
+  # INTEGER PROGRAMMING
+  A[1,ncol(A)] -> best
+  for(c in 1:(ncol(A)-1)){
+    if(isInteger[c]==TRUE & basic[c]==TRUE){
+      r <- which(A[,c]==1,arr.ind = TRUE) # Selecting row of basic integer
+      if(near(A[r,ncol(A)],as.integer(A[r,ncol(A)]))){
+        next
+      }
+      # Lower Bound
+      f <- c(rep(0,ncol(A))) # Creating new vector for new constraint
+      f[c] <- 1
+      f[ncol(A)] <- floor(A[r,ncol(A)]) # Floor value of basic integer
+      Af <- rbind(lp[[1]],f) # Adding vector to original matrix
+      Af[,ncol(Af)] -> RHS # Chop RHS to add slack var
+      Af <- Af[,-ncol(Af)]
+      s1 <- c(rep(0,nrow(Af)-1),1)
+      Af <- cbind(Af,s1,RHS) # Floored matrix
+      sPrimal(Af) -> Af # Simplex on floored matrix 
+      # Grab objective value for comparison 
+      if(checkIBFS(Af)==TRUE){
+        Af[1,ncol(Af)] -> lb
+      } else {
+        lb <- 0 # Infeasible
+      }
+      variables <- list(varnames = varnames,
+                        integers = isInteger,
+                        basic = basic)
+      lpAf <- list(matrix = Af, variables = variables, identity = identity)
+      # Upper Bound
+      f[ncol(A)] <- ceiling((A[r,ncol(A)])) # Changing constraint to ceiling value of basic integer
+      Ac <- rbind(lp[[1]],f) # Row binding f to original matrix
+      Ac[,ncol(Ac)] -> RHS # Chop RHS
+      e1 <- c(rep(0,nrow(Ac)-1),-1) # Adding excess var
+      Ac <- cbind(Ac,e1,RHS)
+      objRow <- Ac[1,] # Locking objective row
+      a1 <- c(.Machine$integer.max, rep(0,nrow(Ac)-2),1) # Adding artificial var
+      #Ac[1,] <- c(1,rep(0,ncol(Ac)-1))
+      Ac <- Ac[,-ncol(Ac)]
+      Ac <- cbind(Ac,a1,RHS)
+      pivot(Ac,nrow(Ac),ncol(Ac)-1) -> Ac
+      sPrimal(Ac) -> Ac
+      #Ac[,-(ncol(Ac)-1)] -> Ac # Removing artificial variable
+      #Ac[1,] <- objRow # Reintroducing objective
+      if(checkIBFS(Ac)==TRUE){ # Check to primal
+        sPrimal(Ac) -> Ac
+      }
+      if(checkIBFS(Ac)==TRUE){ # Check to feasible
+        Ac[1,ncol(Ac)] -> ub
+      } else {
+        ub <- 0 # Infeasible
+      }
+      compVec <- c(best,lb,ub)
+      variables <- list(varnames = varnames,
+                        integers = isInteger,
+                        basic = basic)
+      lpAc <- list(matrix = Ac, variables = variables, identity = identity)
+      return(list(lpAf=lpAf, lpAc=lpAc))
+      #break # needs fixing DO NOT PROCEED
+      if(which.max(compVec)==2){ # if lower bound is better, select as next node
+        A <- Af
+        best <- lb
+        if(near(A[r,ncol(A)],as.integer(A[r,ncol(A)]))){
+          return(A)
+        }
+      } else if(which.max(compVec)==3){ # if upper bound is better, select as next node
+        A <- Ac
+        best <- ub
+        if(near(A[r,ncol(A)],as.integer(A[r,ncol(A)]))){
+          return(A)
+        }
+      }
+    }
+  } 
+}
+```
+
+# Check Initial Basic Feasible Solution
+```{r}
+checkIBFS <- function(A){
+  RHS <- A[2:nrow(A),ncol(A)]
+  basic <- rep(FALSE,ncol(A))
+  for(i in 1:ncol(A)){
+    if(identical(unique(A[,i]),c(0,1)) | identical(unique(A[,i]),c(1,0))){
+      basic[i] = TRUE
+    }
+  }  
+  if(ncol((A[,which(basic==TRUE)])==ncol(diag(nrow(A)))) & all(RHS >= 0)){
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+```
+
+# Affine Scaling
+```{r}
+affine <- function(lp,x, alpha=0.9){
+  if(typeof(lp)=="list"){
+    lp <- lp[[1]]
+  } else {
+    lp <- lp
+  }
+  if(missing(x)){
+    stop("Initial point x must be specified")
+  }
+  if(identical(unique(lp[,1]),c(1,0))){
+    lp <- lp[,-1] # remove z column if present
+  }
+  xprev <- x
+  repeat{
+    C <- -1*lp[1,c(-ncol(lp))]
+    M <- lp[-c(1),-c(ncol(lp))]
+    D <- diag(x)
+    MD <- M%*%D
+    CD <- D%*%C
+    # (transpose(MD)*inverse(MD*transpose(MD)))*MD
+    np <- (t(MD)%*%(ginv(MD%*%t(MD))))%*%MD
+    nullProjection <- diag(1,nrow(np),ncol(np)) - np # I - np
+    legalDirection <- nullProjection%*%CD
+    lambda <- min(legalDirection)
+    step <- (-alpha/lambda)*legalDirection
+    x <- (x + D%*%step)
+    x <- as.vector(x)
+    if(any(near(x,0))){
+      return(xprev)
+    } else if(all(near(x,xprev,tol=.Machine$double.eps))){
+      return(x)
+    } else {
+      xprev <- as.vector(x)
+    }
+  }
+}
+```
+
+# Affine Scaling Single Step
+```{r}
+affineStep <- function(lp,x,alpha=0.9){
+  if(typeof(lp)=="list"){
+    lp <- lp[[1]]
+  } else {
+    lp <- lp
+  }
+  if(missing(x)){
+    stop("Initial point x must be specified")
+  }
+  C <- -1*lp[1,c(-ncol(lp))]
+  M <- lp[-c(1),-c(ncol(lp))]
+  D <- diag(x)
+  MD <- M%*%D
+  CD <- D%*%C
+  # (transpose(MD)*inverse(MD*transpose(MD)))*MD
+  tMD <- t(MD)
+  MDtMD <- MD%*%t(MD)
+  invMD <- ginv(MDtMD)
+  np <- (t(MD)%*%(ginv(MD%*%t(MD))))%*%MD
+  nullProjection <- diag(1,nrow(np),ncol(np)) - np # I - np
+  legalDirection <- nullProjection%*%CD
+  lambda <- min(legalDirection)
+  step <- (-alpha/lambda)*legalDirection
+  x <- (x + D%*%step)
+  x <- as.vector(x)
+  return(list(MD=MD,CD=CD,tMD=tMD,MDtMD=MDtMD,invMD=invMD,np=np,nullProjection=nullProjection,legalDirection=legalDirection,step=step,x=x))
+}
+```
+
+# Add Artificial and Excess Variable
+```{r}
+addExcessArtificial <- function(M,column,value){
+  RHS <- M[,ncol(M)]
+  M <- M[,-ncol(M)]
+  M <- cbind(M,'e'=c(rep(0,nrow(M))),'a'=c(.Machine$integer.max,rep(0,nrow(M)-1)),RHS)
+  M <- rbind(M,c(rep(0,ncol(M))))
+  M[nrow(M),ncol(M)-2] <- -1 # excess var
+  M[nrow(M),ncol(M)-1] <- 1 # artificial var
+  M[nrow(M),column] <- 1
+  M[nrow(M),ncol(M)] <- value
+  return(M)
+}
+```
+
+# Check Basis
+```{r}
+checkBasis <- function(M){
+  basis <- c()
+  varnames <- c()
+  for(i in 1:ncol(M)){
+    if(identical(unique(M[,i]),c(0,1)) | identical(unique(M[,i]),c(1,0))){
+      r <- which.max(M[,i])
+      varnames <- append(varnames,colnames(M)[i])
+      basis <- append(basis, M[r,ncol(M)])
+    }
+  }
+  if(length(basis)!=nrow(M)){
+    warning(paste("Incomplete Basis. Expected",nrow(M),"basic variables, but only",length(basis),"were found."))
+  }
+  basis <- setNames(basis,varnames)
+  return(basis)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,238 @@
+---
+title: "STA 418 Final Project"
+author: "Alex Kloska"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+##### Note: Packages not covered in class were used. Packages: gridExtra, stargazer, jtools
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(gridExtra)
+library(stringr)
+library(dplyr)
+library(modelr)
+library(tidyverse)
+library(stargazer)
+library(jtools)
+options(scipen=20) # changing number of digits shown before scientific notation is used
+```
+
+
+```{r message=FALSE}
+gvsu <- read_csv("finalprojectdata.csv")
+# Reordering debt to first column
+gvsu <- gvsu[c(7,1,2,3,4,5,6)]
+```
+
+# 1. Exploratory Analysis
+```{r}
+gvsu %>%
+  ggplot(mapping=aes(x=distance,y=debt)) +
+  geom_point() +
+  geom_smooth() +
+  labs(x="Distance from GVSU (miles)", y="Debt ($)") +
+  ggtitle("Debt by Distance from GVSU") -> p1
+
+gvsu %>%
+  ggplot(mapping=aes(x=scholarship,y=debt)) +
+  geom_point() +
+  geom_smooth() +
+  labs(x="Scholarship (average per year in $)", y="Debt ($)") +
+  ggtitle("Debt by Scholarship Amount") -> p2
+
+gvsu %>%
+  ggplot(mapping=aes(x=parents,y=debt)) +
+  geom_point() +
+  geom_smooth() +
+  labs(x="Proportion of Tuition Paid by Parents", y="Debt ($)") +
+  ggtitle("Debt by Percentage of College Paid for by Parents") -> p3
+
+gvsu %>%
+  ggplot(mapping=aes(x=car,y=debt)) +
+  geom_point() +
+  geom_smooth() +
+  labs(x="Age of Car (years)", y="Debt ($)") +
+  ggtitle("Debt by Age of Car (years)") -> p4
+
+gvsu %>%
+  ggplot(mapping=aes(x=housing,group=housing,y=debt)) +
+  geom_boxplot() +
+  labs(x="Housing Type", y="Debt ($)") +
+  ggtitle("Debt by Housing Type") -> p5
+
+gvsu %>%
+  ggplot(mapping=aes(group=major,x=major,y=debt)) +
+  geom_boxplot() +
+  labs(x="Major", y="Debt ($)") +
+  ggtitle("Debt by Major") -> p6
+
+grid.arrange(p1,p2,p3,p4) # Numeric variables
+p5 # Housing Type
+p6 # Major
+```
+
+Looking at the exploratory graphs, there appears to be potential relationships between distance and debt, scholarship and debt, and proportion of tuition paid by parents and debt. The remaining variables do not appear to have any obvious relationships to debt.
+
+# 2. Creating Dummy Variables
+```{r}
+gvsu %>% mutate(housingDummy = ifelse(gvsu$housing=="on campus",1,0),
+                majorDummySTEM = ifelse(gvsu$major=="STEM",1,0),
+                majorDummyBusiness = ifelse(gvsu$major=="business",1,0)) -> gvsu
+gvsu <- gvsu %>% select(-c("housing","major")) # removing housing and major from dataset
+```
+
+I've created 3 dummy variables here. The housingDummy variable is 1 if the student lives on campus and 0 if they live off campus. The majorDummySTEM variable is 1 if the student is a STEM major and 0 if they are not. The majorDummyBusiness variable is 1 if they are a business major and 0 if they are not. There are two dummy variables for the major categorical variable because there are 3 categories and the rule is to have n-1 dummy variables for the number of categories.
+
+# 3. Model Select Function
+Assuming that the dataset is in the form of Y,X1,X2,...,Xn, this function will create a model for all possible combinations of the variables and output their model number, number of predictors, the variables, the associated $r^2$, and a plot comparison of all the models $r^2$.
+```{r}
+modelSelect <- function(dataset){
+  variables <- colnames(dataset)
+  modelList <- NULL
+  nExplan <- NULL # number of explanatory variables in the model
+  # Putting models into a list
+  dependent <- paste(variables[1],"~")
+  variables <- variables[-1] # remove dependent from names
+  for(i in 1:length(variables)){
+    # combination of predictors, taken i at a time
+    varCombinations <- combn(variables,i,simplify = FALSE)
+    for(j in 1:length(varCombinations)){
+      explanatory <- paste(varCombinations[[j]],collapse = "+")
+      model <- paste(dependent,explanatory)
+      # Add model to list
+      modelList <- c(modelList,model)
+      nExplan = c(nExplan,i)
+    }
+  }
+  # Converting models into formulas then mapping them with lm()
+  modelInfo <- modelList %>% 
+    map(as.formula) %>% 
+    map(lm,data=dataset)
+  # Extracting r-squared value from summaries
+  rSquared <- lapply(modelInfo, function(x) summary(x)$r.squared)
+  adjrSquared <- lapply(modelInfo, function(x) summary(x)$adj.r.squared)
+  # Unlisting for ease of use
+  rSquared <- unlist(rSquared)
+  adjrSquared <- unlist(adjrSquared)
+  # Creating a tibble of the models and numbering them
+  models <- tibble(ModelNumber = 1:length(modelList),
+                   nExplan,
+                   modelList,
+                   rSquared)
+  # Finding the maximum R-squared in each group of predictor counts
+  maxR <- aggregate(rSquared~nExplan, models, function(x) max(x))
+  # Finding the models associated with the highest R-squared for each group of predictors
+  maxRModels <- match(maxR$rSquared,models$rSquared)
+  # Creating a tibble to be used for plot
+  models <- tibble(ModelNumber = 1:length(modelList),
+                   nExplan,
+                   modelList,
+                   rSquared)
+  rSquarePlot <- models %>% 
+    ggplot(mapping=aes(x=nExplan, y=rSquared)) + 
+    geom_point() +
+    geom_smooth() +
+    scale_x_continuous(expand = c(.075, .075)) +
+    labs(x="Number of Predictors",title="Best Models by Number of Predictors") +
+    geom_point(data=maxR,color="red") + # highlighting models
+    geom_text(data=maxR,aes(label=paste("Model",maxRModels)), nudge_y = 0.05)
+  output <- tibble(Model = 1:length(modelList),
+                   Predictors = nExplan, 
+                   Formula = modelList, 
+                   rSquared, 
+                   adjustedRSquared=adjrSquared)
+  bestModels <- output[maxRModels,] # Selecting the best models
+  return(list(Models=output,Plot=rSquarePlot, bestModels=bestModels))
+}
+```
+
+Summarizing the flow of the function: 
+
+I begin by extracting the names of all the variables from the columns in the dataset. These are used to create strings for the formulas that are required for the lm() function. The next step is to create all unique combinations of the variables. I did this using a nested loop and the combn() function to create the combinations. In the for(i) loop, it iterates through the number of variables in the dataset. For each for(i) loop, there is another loop for(j) that creates strings from all of the combinations created by the iteration of the for(i) loop. Once it has completed this, it maps all of the strings as formulas and then maps the formulas to the lm() function. Then I extract the $r^2$ values, group them by the number of predictors, calculate the maximum $r^2$ for each group, and then plot the models using ggplot. The function returns a list containing all of the models and a plot of the $r^2$ values for each model grouped by the number of predictors.
+
+# 4. Choosing the Best Model
+```{r}
+gvsuModels <- modelSelect(gvsu)
+gvsuModels$Models
+gvsuModels$Plot
+```
+
+The plot indicates that models 2, 8, 29, 67, 104, 123, and 127 are the best in each of their groups. The function above also selects these models for me, so I will call on the bestModels created by the function. I have commented out the method for manual selection, but have placed it there to show how the selection could be done if it was not included in the function.
+
+```{r}
+# gvsuModels$Models[c(2,8,29,67,104,123,127),] # for manual selection
+gvsuModels$bestModels
+```
+
+
+The $r^2$ values are all extremely close when the model reaches 3+ predictors. To avoid having an overfitted model, the best model to use is model 29. Adding more variables than distance, scholarship, and parents provides a negligable increase in $r^2$ while complicating the model. Looking at the adjusted $r^2$, it actually decreases going from 5 to 6 predictors in the model, indicating that the model is being overfitted.
+
+```{r}
+bestModel <-lm(debt~distance+scholarship+parents,data=gvsu)
+stargazer(bestModel,type="text")
+```
+
+The equation for this model is:
+
+$Y = 37,510.150+40.481X_1-1.544X_2-22215.520X_3$
+
+where $X_1$ = distance from school (in miles), $X_2$= scholarship amount (in dollars), $X_3$ = percentage paid by parents, and $Y$= debt (in dollars) 
+
+All of these findings make sense. People who live further away will need to spend money on dorms/apartments while those who are closer can commute for cheaper. The coefficient for scholarship indicates that for each dollar of scholarship money received, the predicted debt goes down by $1.54. The difference is likely due to variance and accrued interest on debt. Percentage paid by parents shows that when 100% of the tuition is paid by the parents, the predicted debt goes down by \$22215.51.
+
+# 5. Residual Analysis 
+```{r}
+# Residuals
+gvsu %>%
+  add_residuals(bestModel) %>% 
+  ggplot(aes(debt,(resid))) +
+  geom_hline(yintercept = 0, colour = "black", size = 1, alpha=0.3) +
+  labs(title="Residuals by Debt", y="Residual") +
+  geom_point() -> residualPlot
+
+# Standardized Residuals (residuals / standard deviation of residuals)
+gvsu %>%
+  add_residuals(bestModel) %>% 
+  ggplot(aes(debt,(resid/sd(resid)))) +
+  geom_hline(yintercept = 0, colour = "black", size = 1, alpha=0.3) +
+  labs(title="Standardized Residuals by Debt", y="Standardized Residual") +
+  geom_point() -> sdResidualPlot
+
+grid.arrange(residualPlot,sdResidualPlot,ncol=2)
+```
+
+The first thing that stands out when graphing the residuals is the extreme outlier at around $15000 of debt. The next noticeable pattern is a positive diagonal pattern which is telling us that the model is under-predicting those with lower debt and over-predicting those with higher debt. Homoscedasticity appears to be fine in this model.
+
+# 6. Two Way Interaction
+For this problem, I used the interaction_plot function from the jtools package.
+```{r}
+interactionModel <- lm(debt~scholarship+parents+housingDummy+housingDummy*scholarship+scholarship*parents,data=gvsu)
+stargazer(interactionModel,type="text")
+```
+
+```{r}
+gvsu %>%
+  add_residuals(interactionModel) %>% 
+  ggplot(aes(debt,(resid/sd(resid)))) +
+  geom_hline(yintercept = 0, colour = "black", size = 1, alpha=0.3) +
+  labs(title="Standardized Residuals by Debt", y="Standardized Residual") +
+  geom_point()
+
+interact_plot(interactionModel,
+              pred="housingDummy",
+              modx="scholarship", 
+              main.title = "Interaction Between Housing and Scholarship")
+interact_plot(interactionModel,
+              pred="parents",
+              modx="scholarship",
+              main.title = "Interaction Between Parents and Scholarship")
+beepr::beep()
+```
+
+The residuals for this model appear to be upward sloping as well. The interaction models indicate that there is a slight interaction between housing and scholarship as those below the mean of scholarship tend to have a higher debt when living on-campus compared to those who received more scholarship. The slopes on these interaction terms tell us that scholarships effect on debt might be dependent on housing and that scholarships effect on debt is unaffected by the percentage of tuition paid by parents.
+
+
+
